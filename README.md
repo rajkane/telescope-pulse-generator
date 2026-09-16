@@ -1,9 +1,9 @@
-# Arduino ZC-600 Pulse Generator for RTS2 Telescope Control
+# Arduino ZC-600 Pulse Generator for Telescope Control
 
-Firmware for an **Arduino Uno** acting as a high-precision hardware pulse generator and RS-485 interface converter for telescope mount tracking control via **RTS2** (Remote Telescope System 2).
+Firmware for an **Arduino Uno** acting as a high-precision hardware pulse generator and RS-485 interface converter for telescope mount tracking control via serial commands.
 
 ## Overview
-This project handles real-time pulse generation for telescope tracking drives based on dynamic delay values received over a serial link. It isolates the telescope's astrometrical calculations (handled by RTS2) from the low-level pulse timing and hardware bus management.
+This project handles real-time pulse generation for telescope tracking drives based on dynamic delay values received over a serial link. It isolates high-level positioning and tracking calculations from the low-level pulse timing and hardware bus management.
 
 ## Key Features
 * **Robust Serial Parsing:** Uses line-based reading (`readStringUntil('\n')` with `.trim()`) to completely eliminate buffer errors and phantom zero-commands.
