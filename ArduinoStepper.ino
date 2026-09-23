@@ -78,7 +78,7 @@ void setup() {
   val = digitalRead(pinACT);
   lastReading = val;
   prevval = val; 
-  digitalWrite(pinLED, val);
+  digitalWrite(pinLED, val == LOW ? HIGH : LOW); // Ak bezi (LOW), zapni LED (HIGH)
 
   // Úvodná správa pre Serial Monitor
   Serial.println("-------------------------------------");
@@ -152,7 +152,7 @@ void loop() {
     if (reading != val) {
       prevval = val;
       val = reading;
-      digitalWrite(pinLED, val);
+      digitalWrite(pinLED, !val);  // Inverzia: val == LOW (0) -> !val (1) -> LED svieti
       
       // 3. Výpis zmien stavu do Serial Monitoru (iba pri reálnej a stabilnej zmene)
       Serial.print("Tracking ");
