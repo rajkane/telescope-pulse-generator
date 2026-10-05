@@ -31,27 +31,23 @@
  *    Znamienko určuje smer pohonu cez `pindirtx`.
  *
  * 3. Generovanie pulzov:
- *    Pulzy sú generované na výstupe `pinpulsetx`.
+ *    Pulzy sú generované na výstupe `pinpulsetx` pomocou Timer1 v CTC
+ *    režime s presnosťou 0.5 µs na pozadí (prerušenie).
  *
- *    Hodnota `mydelay` určuje približné trvanie HIGH aj LOW časti
- *    pulzu.
+ *    Hodnota `mydelay` určuje trvanie HIGH aj LOW časti pulzu.
  *
  *    Pre `mydelay = 175 µs`:
  *
- *        HIGH ≈ 175 µs
- *        LOW  ≈ 175 µs
+ *        HIGH = 175 µs
+ *        LOW  = 175 µs
  *
- *    Celková perióda je približne:
+ *    Celková perióda je:
  *
  *        175 + 175 = 350 µs
  *
- *    Frekvencia je približne:
+ *    Frekvencia je presne:
  *
- *        1 / 350 µs ≈ 2.86 kHz
- *
- *    Skutočné časovanie môže byť mierne ovplyvnené réžiou
- *    digitalWrite(), preto sa v generovaní používa približná
- *    kompenzácia časovania.
+ *        1 / 350 µs = 2.857 kHz
  *
  * 4. Riadenie chodu:
  *    Arduino sleduje stav vstupu `pinACT` (pin 12).
@@ -110,14 +106,14 @@
  *    |      │         │         │         │
  * 0V +──────┘         └─────────┘         └─────────► Čas
  *          <---175---> <---175--->
- *             HIGH         LOW
+ *             HIGH        LOW
  *
  *    Pri mydelay = 175 µs:
  *
- *        HIGH ≈ 175 µs
- *        LOW  ≈ 175 µs
- *        perióda ≈ 350 µs
- *        frekvencia ≈ 2.86 kHz
+ *        HIGH = 175 µs
+ *        LOW  = 175 µs
+ *        perióda = 350 µs
+ *        frekvencia = 2.857 kHz
  *
  * =====================================================================
  */
@@ -130,21 +126,22 @@ const int pinpulserx  = 6;   // MAX485 pulz RX
 const int pinpulsetx  = 7;   // MAX485 pulz TX
 const int pinACT      = 12;  // Aktivita: LOW = BEH, HIGH = STOP
 const int pinLED      = 13;  // LED: svieti = BEH
+const int BAUNDS      = 9600;
 
 // ---------------------------------------------------------------------
-// Nastavenie rýchlosti pulzov
+// Nastavenie rýchlosti a časovania pulzov
 // ---------------------------------------------------------------------
 volatile unsigned long mydelay = 175;  // Oneskorenie v µs
+volatile bool pulseState = LOW;        // Aktuálny stav výstupného pulzu
 
 // ---------------------------------------------------------------------
 // Stav systému
 // ---------------------------------------------------------------------
-int val     = HIGH;
-int prevval = HIGH;
-
+volatile int val     = HIGH;
+int prevval          = HIGH;
 // true  = sériový príkaz povoľuje chod
 // false = sériovým príkazom bol vydaný STOP (0)
-bool serialEnabled = true;
+volatile bool serialEnabled = true;
 
 // ---------------------------------------------------------------------
 // Debounce pre pinACT
@@ -160,6 +157,23 @@ char inputBuffer[16];
 byte bufferPos = 0;
 
 // ---------------------------------------------------------------------
+// Hardvérové prerušenie Timer1 pre presné generovanie pulzov
+// ---------------------------------------------------------------------
+ISR(TIMER1_COMPA_vect) {
+  if ((val == LOW) && serialEnabled) {
+    pulseState = !pulseState;
+    if (pulseState) {
+      PORTD |= (1 << PORTD7);  // HIGH na pin 7
+    } else {
+      PORTD &= ~(1 << PORTD7); // LOW na pin 7
+    }
+  } else {
+    pulseState = LOW;
+    PORTD &= ~(1 << PORTD7);   // Vynútené LOW na pin 7 pri STOPe
+  }
+}
+
+// ---------------------------------------------------------------------
 // Spracovanie sériového príkazu
 // ---------------------------------------------------------------------
 void processCommand(long inputVal) {
@@ -169,26 +183,30 @@ void processCommand(long inputVal) {
   // STOP
   // -------------------------------------------------------------------
   if (inputVal == 0) {
-
     serialEnabled = false;
     mydelay = 175;
+    
+    // Aktualizácia Timer1 pre predvolenú hodnotu 175 µs
+    noInterrupts();
+    TCNT1 = 0;
+    OCR1A = (175 * 2) - 1; // Prescaler 8 (0.5 µs na tik)
+    interrupts();
 
     // Okamžité vypnutie pulzového vysielania
-    digitalWrite(pinpulsetx, LOW);
+    pulseState = LOW;
+    PORTD &= ~(1 << PORTD7);
     digitalWrite(pinpulseen, LOW);
-
     // Vypnutie smerového vysielania
     digitalWrite(pindiren, LOW);
-
     Serial.println("Cycle stopped");
-
     return;
   }
   // -------------------------------------------------------------------
   // Pred zmenou smeru vždy vypneme pulzy
   // -------------------------------------------------------------------
   digitalWrite(pinpulseen, LOW);
-  digitalWrite(pinpulsetx, LOW);
+  pulseState = LOW;
+  PORTD &= ~(1 << PORTD7);
   // -------------------------------------------------------------------
   // Nastavenie smeru a rýchlosti
   // -------------------------------------------------------------------
@@ -199,6 +217,13 @@ void processCommand(long inputVal) {
     mydelay = (unsigned long)inputVal;
     digitalWrite(pindirtx, HIGH);
   }
+
+  // Prepočet registra OCR1A pre Timer1 (prescaler 8 -> 1 tik = 0.5 µs)
+  noInterrupts();
+  TCNT1 = 0;
+  OCR1A = (mydelay * 2) - 1;
+  interrupts();
+
   // Krátka pauza po zmene smeru
   delayMicroseconds(10);
   // Nový platný príkaz opäť povoľuje sériové generovanie
@@ -219,23 +244,19 @@ void processCommand(long inputVal) {
 // Neblokujúce čítanie sériovej linky
 // ---------------------------------------------------------------------
 void handleSerial() {
-
   while (Serial.available() > 0) {
     char c = Serial.read();
-
     // ---------------------------------------------------------------
     // Koniec príkazu
     // ---------------------------------------------------------------
     if (c == '\n' || c == '\r') {
       if (bufferPos > 0) {
         inputBuffer[bufferPos] = '\0';
-
         // -----------------------------------------------------------
         // Overenie formátu
         // -----------------------------------------------------------
         bool valid = true;
         bool hasDigit = false;
-
         for (byte i = 0; i < bufferPos; i++) {
           char ch = inputBuffer[i];
           if (i == 0 && ch == '-') {
@@ -279,7 +300,6 @@ void handleSerial() {
   }
 }
 
-
 // ---------------------------------------------------------------------
 // Inicializácia
 // ---------------------------------------------------------------------
@@ -287,13 +307,11 @@ void setup() {
   // -------------------------------------------------------------------
   // Master používa 9600 baud
   // -------------------------------------------------------------------
-  Serial.begin(9600);
-
+  Serial.begin(BAUNDS);
   // -------------------------------------------------------------------
   // Pin konfigurácia
   // -------------------------------------------------------------------
   pinMode(pinLED, OUTPUT);
-
   // LOW = BEH
   // HIGH = STOP
   pinMode(pinACT, INPUT_PULLUP);
@@ -303,7 +321,6 @@ void setup() {
   pinMode(pindirtx, OUTPUT);
   pinMode(pinpulserx, INPUT);
   pinMode(pinpulsetx, OUTPUT);
-
   // -------------------------------------------------------------------
   // Bezpečný počiatočný stav
   //
@@ -314,14 +331,12 @@ void setup() {
   digitalWrite(pinpulseen, LOW);
   digitalWrite(pinpulsetx, LOW);
   digitalWrite(pindirtx, HIGH);
-
   // -------------------------------------------------------------------
   // Zistenie počiatočného stavu pinACT
   // -------------------------------------------------------------------
   val = digitalRead(pinACT);
   lastReading = val;
   prevval = val;
-
   // -------------------------------------------------------------------
   // LED
   //
@@ -329,6 +344,19 @@ void setup() {
   // HIGH -> STOP -> LED OFF
   // -------------------------------------------------------------------
   digitalWrite(pinLED, !val);
+
+  // -------------------------------------------------------------------
+  // Konfigurácia Timer1 (CTC režim, prescaler 8)
+  // -------------------------------------------------------------------
+  noInterrupts();
+  TCCR1A = 0;
+  TCCR1B = 0;
+  TCNT1  = 0;
+  OCR1A  = (mydelay * 2) - 1; // Prescaler 8: 1 tik = 0.5 µs (16 MHz / 8 = 2 MHz)
+  TCCR1B |= (1 << WGM12);     // CTC režim (Clear Timer on Compare Match)
+  TCCR1B |= (1 << CS11);      // Prescaler 8
+  TIMSK1 |= (1 << OCIE1A);    // Povolenie prerušenia Timer1 Compare Match A
+  interrupts();
 
   // -------------------------------------------------------------------
   // Ak master už pri štarte povoľuje BEH,
@@ -344,7 +372,9 @@ void setup() {
   // -------------------------------------------------------------------
   Serial.println("-------------------------------------");
   Serial.println("Arduino ZC-600 System Initialized");
-  Serial.println("Serial: 9600 baud");
+  Serial.print("Serial: ");
+  Serial.print(BAUNDS);
+  Serial.println(" baud");
   Serial.print("SPEED IS ");
   Serial.print(mydelay);
   Serial.println(" us");
@@ -370,24 +400,18 @@ void loop() {
   // 2. PIN ACT + DEBOUNCE
   // ===================================================================
   int reading = digitalRead(pinACT);
-
   if (reading != lastReading) {
     lastDebounceTime = millis();
   }
 
-
   if ((millis() - lastDebounceTime) > debounceDelay) {
-
     if (reading != val) {
-
       prevval = val;
       val = reading;
       // ---------------------------------------------------------------
       // LED
       // ---------------------------------------------------------------
       digitalWrite(pinLED, !val);
-
-
       // ---------------------------------------------------------------
       // PIN ACT = HIGH
       // ---------------------------------------------------------------
@@ -395,7 +419,8 @@ void loop() {
       // Pulz okamžite vypneme.
       // ---------------------------------------------------------------
       if (val == HIGH) {
-        digitalWrite(pinpulsetx, LOW);
+        pulseState = LOW;
+        PORTD &= ~(1 << PORTD7);
         digitalWrite(pinpulseen, LOW);
         Serial.print("Tracking ");
         Serial.print(prevval);
@@ -404,10 +429,7 @@ void loop() {
         Serial.print(" DELAY ");
         Serial.print(mydelay);
         Serial.println(" IDLE");
-
       }
-
-
       // ---------------------------------------------------------------
       // PIN ACT = LOW
       // ---------------------------------------------------------------
@@ -415,16 +437,11 @@ void loop() {
       // Pulzy povolíme iba ak nebol sériovým príkazom
       // vydaný STOP (0).
       // ---------------------------------------------------------------
-
       else {
-
         if (serialEnabled) {
-
           digitalWrite(pindiren, HIGH);
           digitalWrite(pinpulseen, HIGH);
         }
-
-
         Serial.print("Tracking ");
         Serial.print(prevval);
         Serial.print(" > ");
@@ -437,23 +454,11 @@ void loop() {
     }
   }
 
-
   lastReading = reading;
-
 
   // ===================================================================
   // 3. GENEROVANIE PULZOV
   // ===================================================================
-
-  if ((val == LOW) && serialEnabled) {
-
-    // Kompenzácia približnej réžie digitalWrite()
-    unsigned long adjDelay =
-      (mydelay > 4) ? (mydelay - 4) : mydelay;
-
-    digitalWrite(pinpulsetx, HIGH);
-    delayMicroseconds(adjDelay);
-    digitalWrite(pinpulsetx, LOW);
-    delayMicroseconds(adjDelay);
-  }
+  // Pulzy sú generované na piny 7 automaticky na pozadí v prerušení
+  // Timer1 (ISR TIMER1_COMPA_vect) s presnosťou 0.5 µs a nulovým driftom.
 }
