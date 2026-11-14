@@ -212,10 +212,10 @@ void processCommand(long inputVal) {
   // -------------------------------------------------------------------
   if (inputVal < 0) {
     mydelay = (unsigned long)(-inputVal);
-    digitalWrite(pindirtx, LOW);
+    digitalWrite(pindirtx, HIGH);   // predtym LOW
   } else {
     mydelay = (unsigned long)inputVal;
-    digitalWrite(pindirtx, HIGH);
+    digitalWrite(pindirtx, LOW);  // predtym HIGH
   }
 
   // Prepočet registra OCR1A pre Timer1 (prescaler 8 -> 1 tik = 0.5 µs)
