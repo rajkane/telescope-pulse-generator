@@ -255,10 +255,10 @@ void processCommand(long inputVal) {
   if (inputVal < 0) {
     long long absVal = -(long long)inputVal;
     targetHalfPeriodUs = (unsigned long)absVal;
-    digitalWrite(pindirtx, HIGH);   // predtym LOW
+    digitalWrite(pindirtx, LOW);
   } else {
     targetHalfPeriodUs = (unsigned long)inputVal;
-    digitalWrite(pindirtx, LOW);  // predtym HIGH
+    digitalWrite(pindirtx, HIGH);
   }
 
   // Prepočet registra OCR1A pre Timer1 s ošetrením prescalera
